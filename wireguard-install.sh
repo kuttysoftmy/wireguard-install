@@ -22,7 +22,7 @@ check_ip() {
 }
 
 check_pvt_ip() {
-	IPP_REGEX='^(10|127|172\.(1[6-9]|2[0-9]|3[0-1])|192\.168|169\.254)\.'
+	IPP_REGEX='^(10|127|172\.(1[6-19]|2[0-9]|3[0-1])|192\.168|169\.254)\.'
 	printf '%s' "$1" | tr -d '\n' | grep -Eq "$IPP_REGEX"
 }
 
@@ -61,6 +61,9 @@ check_os() {
 	elif [[ -e /etc/almalinux-release || -e /etc/rocky-release || -e /etc/centos-release ]]; then
 		os="centos"
 		os_version=$(grep -shoE '[0-9]+' /etc/almalinux-release /etc/rocky-release /etc/centos-release | head -1)
+         elif [[ -e /etc/cloudlinux-release ]]; then
+		os="centos"
+		os_version=$(grep -oE '[0-9]+' /etc/cloudlinux-release | head -1)
 	elif [[ -e /etc/fedora-release ]]; then
 		os="fedora"
 		os_version=$(grep -oE '[0-9]+' /etc/fedora-release | head -1)
@@ -600,7 +603,7 @@ check_firewall() {
 }
 
 abort_and_exit() {
-	echo "Abort. No changes were made." >&2
+	echo "Abort. No changes were made." >&2;
 	exit 1
 }
 
@@ -1296,7 +1299,7 @@ if [ "$remove_client" = 1 ]; then
 		print_client_removal_aborted
 		exit 1
 	fi
-fi
+}
 
 if [ "$show_client_qr" = 1 ]; then
 	show_header
@@ -1324,7 +1327,7 @@ if [ "$remove_wg" = 1 ]; then
 		print_wg_removal_aborted
 		exit 1
 	fi
-fi
+}
 
 if [[ ! -e "$WG_CONF" ]]; then
 	check_nftables
@@ -1391,7 +1394,7 @@ else
 		;;
 		3)
 			check_clients
-			select_client_to remove
+			select_			client_to remove
 			confirm_remove_client
 			if [[ "$remove" =~ ^[yY]$ ]]; then
 				print_remove_client
@@ -1440,3 +1443,154 @@ fi
 wgsetup "$@"
 
 exit 0
+
+# Add CloudLinux 8 Support
+check_os() {
+	if grep -qs "ubuntu" /etc/os-release; then
+		os="ubuntu"
+		os_version=$(grep 'VERSION_ID' /etc/os-release | cut -d '"' -f 2 | tr -d '.')
+	elif [[ -e /etc/debian_version ]]; then
+		os="debian"
+		os_version=$(grep -oE '[0-9]+' /etc/debian_version | head -1)
+	elif [[ -e /etc/almalinux-release || -e /etc/rocky-release || -e /etc/centos-release ]]; then
+		os="centos"
+		os_version=$(grep -shoE '[0-9]+' /etc/almalinux-release /etc/rocky-release /etc/centos-release | head -1)
+    elif [[ -e /etc/cloudlinux-release ]]; then
+		os="cloudlinux"
+		os_version=$(grep -oE '[0-9]+' /etc/cloudlinux-release | head -1)
+	elif [[ -e /etc/fedora-release ]]; then
+		os="fedora"
+		os_version=$(grep -oE '[0-9]+' /etc/fedora-release | head -1)
+	elif [[ -e /etc/SUSE-brand && "$(head -1 /etc/SUSE-brand)" == "openSUSE" ]]; then
+		os="openSUSE"
+		os_version=$(tail -1 /etc/SUSE-brand | grep -oE '[0-9\\.]+')
+	else
+		exiterr "This installer seems to be running on an unsupported distribution.
+Supported distros are Ubuntu, Debian, AlmaLinux, Rocky Linux, CentOS, CloudLinux, Fedora and openSUSE."
+	fi
+}
+
+check_os_ver() {
+	if [[ "$os" == "ubuntu" && "$os_version" -lt 2004 ]]; then
+		exiterr "Ubuntu 20.04 or higher is required to use this installer.
+This version of Ubuntu is too old and unsupported."
+	fi
+	if [[ "$os" == "debian" && "$os_version" -lt 11 ]]; then
+		exiterr "Debian 11 or higher is required to use this installer.
+This version of Debian is too old and unsupported."
+	fi
+	if [[ "$os" == "centos" && "$os_version" -lt 8 ]]; then
+		exiterr "CentOS 8 or higher is required to use this installer.
+This version of CentOS is too old and unsupported."
+	fi
+    if [[ "$os" == "cloudlinux" && "$os_version" -lt 8 ]]; then
+		exiterr "CloudLinux 8 or higher is required to use this installer.
+This version of CloudLinux is too old and unsupported."
+	fi
+}
+
+install_pkgs() {
+	if [[ "$os" == "ubuntu" ]]; then
+		export DEBIAN_FRONTEND=noninteractive
+		(
+			set -x
+			apt-get -yqq update || apt-get -yqq update
+			apt-get -yqq install wireguard qrencode $firewall >/dev/null
+		) || exiterr2
+	elif [[ "$os" == "debian" ]]; then
+		export DEBIAN_FRONTEND=noninteractive
+		(
+			set -x
+			apt-get -yqq update || apt-get -yqq update
+			apt-get -yqq install wireguard qrencode $firewall >/dev/null
+		) || exiterr2
+	elif [[ "$os" == "centos" && "$os_version" -eq 9 ]]; then
+		(
+			set -x
+			yum -y -q install epel-release >/dev/null
+			yum -y -q install wireguard-tools qrencode $firewall >/dev/null 2>&1
+		) || exiterr3
+		mkdir -p /etc/wireguard/
+	elif [[ "$os" == "centos" && "$os_version" -le 8 ]]; then
+		(
+			set -x
+			yum -y -q install epel-release elrepo-release >/dev/null
+			yum -y -q --nobest install kmod-wireguard >/dev/null 2>&1
+			yum -y -q install wireguard-tools qrencode $firewall >/dev/null 2>&1
+		) || exiterr3
+		mkdir -p /etc/wireguard/
+	elif [[ "$os" == "cloudlinux" && "$os_version" -eq 8 ]]; then
+		(
+			set -x
+			yum -y -q install epel-release >/dev/null
+			yum -y -q install wireguard-tools qrencode $firewall >/dev/null 2>&1
+		) || exiterr3
+		mkdir -p /etc/wireguard/
+	elif [[ "$os" == "fedora" ]]; then
+		(
+			set -x
+			dnf install -y wireguard-tools qrencode $firewall >/dev/null
+		) || exiterr "'dnf install' failed."
+		mkdir -p /etc/wireguard/
+	elif [[ "$os" == "openSUSE" ]]; then
+		(
+			set -x
+			zypper install -y wireguard-tools qrencode $firewall >/dev/null
+		) || exiterr4
+		mkdir -p /etc/wireguard/
+	fi
+	[ ! -d /etc/wireguard ] && exiterr2
+	# If firewalld was just installed, enable it
+	if [[ "$firewall" == "firewalld" ]]; then
+		(
+			set -x
+			systemctl enable --now firewalld.service >/dev/null 2>&1
+		)
+	fi
+}
+
+remove_pkgs() {
+	if [[ "$os" == "ubuntu" ]]; then
+		(
+			set -x
+			rm -rf /etc/wireguard/
+			apt-get remove --purge -y wireguard wireguard-tools >/dev/null
+		)
+	elif [[ "$os" == "debian" ]]; then
+		(
+			set -x
+			rm -rf /etc/wireguard/
+			apt-get remove --purge -y wireguard wireguard-tools >/dev/null
+		)
+	elif [[ "$os" == "centos" && "$os_version" -eq 9 ]]; then
+		(
+			set -x
+			yum -y -q remove wireguard-tools >/dev/null
+			rm -rf /etc/wireguard/
+		)
+	elif [[ "$os" == "centos" && "$os_version" -le 8 ]]; then
+		(
+			set -x
+			yum -y -q remove kmod-wireguard wireguard-tools >/dev/null
+			rm -rf /etc/wireguard/
+		)
+	elif [[ "$os" == "cloudlinux" && "$os_version" -eq 8 ]]; then
+		(
+			set -x
+			yum -y -q remove wireguard-tools >/dev/null
+			rm -rf /etc/wireguard/
+		)
+	elif [[ "$os" == "fedora" ]]; then
+		(
+			set -x
+			dnf remove -y wireguard-tools >/dev/null
+			rm -rf /etc/wireguard/
+		)
+	elif [[ "$os" == "openSUSE" ]]; then
+		(
+			set -x
+			zypper remove -y wireguard-tools >/dev/null
+			rm -rf /etc/wireguard/
+		)
+	fi
+}
